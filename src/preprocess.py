@@ -45,10 +45,11 @@ class ColumnSelector(BaseEstimator, TransformerMixin):
         self.columns = columns
 
     def fit(self, X, y=None):
+        self.columns_ = list(X.columns) if self.columns is None else list(self.columns)
         return self
 
     def transform(self, X):
-        return X if self.columns is None else X[self.columns]
+        return X[self.columns_]
 
 
 def build_preprocessor(selected_features=None):
