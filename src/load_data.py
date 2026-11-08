@@ -4,10 +4,15 @@ from pathlib import Path
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-DEFAULT_DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
+# Dossier data/ à la racine du projet (WineQuality/raw/data/)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 DATA_DIR = Path(os.environ.get("WINE_DATA_DIR", DEFAULT_DATA_DIR))
 
-TARGET_THRESHOLD = 7   # bon vin si qualite >= 7
+RED_FILE = "winequality-red.csv" #je rajoute ca sinon ca fait un pb avec le path et il comprend pas ou trouver la donnée
+WHITE_FILE = "winequality-white.csv"
+
+TARGET_THRESHOLD = 7   # bon vin si la qualite >= 7
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
 
@@ -15,8 +20,16 @@ TEST_SIZE = 0.2
 def load_wine_data(data_dir=DATA_DIR):
     """Charge les vins rouges et blancs et les fusionne avec une colonne 'type'."""
     data_dir = Path(data_dir)
-    red = pd.read_csv(data_dir / "winequality-red.csv", sep=";")
-    white = pd.read_csv(data_dir / "winequality-white.csv", sep=";")
+
+    for name in (RED_FILE, WHITE_FILE):
+        if not (data_dir / name).exists():
+            raise FileNotFoundError(
+                f"{name} introuvable dans {data_dir.resolve()}. "
+                "Placez les fichiers dans WineQuality/data/ ou définissez WINE_DATA_DIR."
+            )
+
+    red = pd.read_csv(data_dir / RED_FILE, sep=";")
+    white = pd.read_csv(data_dir / WHITE_FILE, sep=";")
     red["type"] = "rouge"
     white["type"] = "blanc"
     return pd.concat([red, white], ignore_index=True)
