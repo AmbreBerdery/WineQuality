@@ -9,6 +9,10 @@ from sklearn.tree import DecisionTreeClassifier
 from src.load_data import PROJECT_ROOT, RANDOM_STATE
 from src.preprocess import build_preprocessor
 
+from scipy.stats import loguniform
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+
 MODELS_DIR = PROJECT_ROOT / "models"
 
 
@@ -57,3 +61,34 @@ TREE_GRID = {
     "model__max_depth": [2, 3, 4, 5, 6, 8, 10, 12, 15, None],
     "model__min_samples_leaf": [1, 5, 10, 20, 50, 100],
 }
+
+
+
+
+# --- k-NN (modèle à distance) ---
+
+def knn(selected_features=None):
+    return make_pipeline(KNeighborsClassifier(), selected_features)
+
+
+KNN_GRID = {
+    "model__n_neighbors": [1, 3, 5, 7, 9, 11, 15, 21, 31, 41, 51],
+    "model__weights": ["uniform", "distance"],
+    "model__p": [1, 2],   # 1 = Manhattan, 2 = euclidienne
+}
+
+
+# --- SVM (modèle à noyau) ---
+
+def svm(selected_features=None):
+    model = SVC(class_weight="balanced", random_state=RANDOM_STATE)
+    return make_pipeline(model, selected_features)
+
+
+SVM_DISTRIBUTIONS = [
+    {"model__kernel": ["rbf"],
+     "model__C": loguniform(1e-2, 1e3),
+     "model__gamma": loguniform(1e-4, 1e1)},
+    {"model__kernel": ["linear"],
+     "model__C": loguniform(1e-2, 1e2)},
+]
