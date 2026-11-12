@@ -12,6 +12,7 @@ from src.preprocess import build_preprocessor
 from scipy.stats import loguniform
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
+from sklearn.naive_bayes import GaussianNB
 
 MODELS_DIR = PROJECT_ROOT / "models"
 
@@ -20,6 +21,7 @@ def load_selected_features():
     """Variables retenues par la sélection (fichier produit par le notebook 02)."""
     with open(MODELS_DIR / "selected_features.json", encoding="utf-8") as f:
         return json.load(f)
+
 
 
 def make_pipeline(model, selected_features=None):
@@ -92,3 +94,13 @@ SVM_DISTRIBUTIONS = [
     {"model__kernel": ["linear"],
      "model__C": loguniform(1e-2, 1e2)},
 ]
+
+# --- Naive Bayes gaussien (modèle probabiliste) ---
+ 
+def naive_bayes(selected_features=None, priors=None):
+    """GaussianNB dans le pipeline commun.
+ 
+    priors=None : probabilités a priori estimées sur les fréquences (favorise la classe majoritaire).
+    priors=[0.5, 0.5] : priors égaux, pour compenser le déséquilibre des classes.
+    """
+    return make_pipeline(GaussianNB(priors=priors), selected_features)
