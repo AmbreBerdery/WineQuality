@@ -1,117 +1,109 @@
-# tests/test_models.py
-# Tests des modèles k-NN, SVM et Naive Bayes, et des recherches d'hyperparamètres.
+# tests/test_evaluate.py
 import numpy as np
 import pandas as pd
 import pytest
-from sklearn.model_selection import StratifiedKFold
+from sklearn.linear_model import LogisticRegression
 
-from src.models import KNN_GRID, SVM_DISTRIBUTIONS, knn, naive_bayes, svm
-from src.tuning import run_grid_search, run_random_search
+from src.evaluate import compare_models, evaluate, train_vs_cv_scores
+from src.models import decision_tree, knn, logistic_regression, naive_bayes, svm
 
 
 @pytest.fixture
 def data():
-    """Petit jeu déséquilibré (environ 20 % de positifs), comme les vins."""
     rng = np.random.default_rng(0)
     X = pd.DataFrame(rng.normal(size=(300, 3)), columns=["a", "b", "c"])
     y = pd.Series((X["a"] + 0.5 * rng.normal(size=300) > 0.8).astype(int))
     return X, y
 
 
-CV3 = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
-
-
-# --- Construction des pipelines ---
-
-@pytest.mark.parametrize("factory", [knn, svm, naive_bayes])
-def test_pipeline_contient_pretraitement_et_modele(factory):
-    pipe = factory()
-    assert list(pipe.named_steps) == ["prep", "model"]
-
-
-@pytest.mark.parametrize("factory", [knn, svm, naive_bayes])
-def test_selection_de_variables(factory, data):
-    """Le modèle ne doit voir que les variables sélectionnées."""
+def test_evaluate_keys_and_ranges(data):
     X, y = data
-    pipe = factory(["a", "b"]).fit(X, y)
-    assert pipe.named_steps["model"].n_features_in_ == 2
+    result = evaluate(LogisticRegression().fit(X, y), X, y)
+    for metric in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
+        assert 0 <= result[metric] <= 1
+    assert result["confusion_matrix"].sum() == len(y)
 
 
-@pytest.mark.parametrize("factory", [knn, svm, naive_bayes])
-def test_predictions_binaires(factory, data):
+def test_evaluate_perfect_model():
+    X = pd.DataFrame({"a": [0.0, 0.1, 0.2, 1.0, 1.1, 1.2]})
+    y = pd.Series([0, 0, 0, 1, 1, 1])
+    result = evaluate(LogisticRegression(C=100).fit(X, y), X, y)
+    assert result["f1"] == 1 and result["roc_auc"] == 1
+
+
+def test_compare_models_sorted_by_f1(data):
     X, y = data
-    pred = factory().fit(X, y).predict(X)
-    assert len(pred) == len(y)
-    assert set(np.unique(pred)) <= {0, 1}
+    results = {
+        "logreg": evaluate(logistic_regression().fit(X, y), X, y),
+        "arbre": evaluate(decision_tree().fit(X, y), X, y),
+    }
+    table = compare_models(results)
+    assert list(table.columns) == ["accuracy", "precision", "recall", "f1", "roc_auc"]
+    assert table["f1"].is_monotonic_decreasing
 
 
-# --- Réglages propres à chaque modèle ---
-
-def test_svm_compense_le_desequilibre():
-    assert svm().named_steps["model"].class_weight == "balanced"
-
-
-def test_svm_fournit_un_score_pour_la_roc(data):
-    """Sans probabilités, le SVM doit fournir decision_function (utilisée pour la ROC)."""
+def test_unpruned_tree_overfits(data):
     X, y = data
-    scores = svm().fit(X, y).decision_function(X)
-    assert scores.shape == (len(y),)
+    scores = train_vs_cv_scores(decision_tree(), X, y)
+    assert scores["train"] == pytest.approx(1.0)
+    assert scores["ecart"] > 0
 
 
-def test_naive_bayes_priors_egaux(data):
+# --- k-NN, Naive Bayes et SVM ---
+
+@pytest.mark.parametrize("factory", [knn, naive_bayes, svm])
+def test_evaluate_knn_nb_svm(factory, data):
+    """evaluate() fonctionne pour les trois modèles et renvoie des métriques valides."""
     X, y = data
-    pipe = naive_bayes(priors=[0.5, 0.5]).fit(X, y)
-    assert np.allclose(pipe.named_steps["model"].class_prior_, [0.5, 0.5])
+    result = evaluate(factory().fit(X, y), X, y)
+    for metric in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
+        assert 0 <= result[metric] <= 1
+    assert result["confusion_matrix"].sum() == len(y)
+
+
+def test_evaluate_svm_sans_probabilites(data):
+    """Le SVM n'utilise pas probability=True : la ROC repose sur decision_function."""
+    X, y = data
+    model = svm().fit(X, y)
+    assert model.named_steps["model"].probability is False
+    result = evaluate(model, X, y)
+    assert result["roc_auc"] > 0.5
+
+
+def test_compare_models_cinq_modeles(data):
+    """Le tableau comparatif contient les cinq modèles, triés par F1."""
+    X, y = data
+    factories = {
+        "naive_bayes": naive_bayes,
+        "regression_logistique": logistic_regression,
+        "arbre_decision": decision_tree,
+        "knn": knn,
+        "svm": svm,
+    }
+    results = {name: evaluate(f().fit(X, y), X, y) for name, f in factories.items()}
+    table = compare_models(results)
+    assert set(table.index) == set(factories)
+    assert table["f1"].is_monotonic_decreasing
+
+
+def test_knn_un_voisin_overfits(data):
+    """Avec k = 1, chaque vin du train est son propre voisin : F1 de 1 en entraînement."""
+    X, y = data
+    scores = train_vs_cv_scores(knn().set_params(model__n_neighbors=1), X, y)
+    assert scores["train"] == pytest.approx(1.0)
+    assert scores["ecart"] > 0
+
+
+def test_naive_bayes_ne_surapprend_pas(data):
+    """Naive Bayes a peu de paramètres : écart train / validation faible."""
+    X, y = data
+    scores = train_vs_cv_scores(naive_bayes(), X, y)
+    assert abs(scores["ecart"]) < 0.1
 
 
 def test_naive_bayes_priors_egaux_augmentent_le_rappel(data):
-    """Des priors égaux font prédire « positif » au moins aussi souvent que les fréquences."""
+    """Des priors égaux compensent le déséquilibre : le rappel ne baisse pas."""
     X, y = data
-    standard = naive_bayes().fit(X, y).predict(X).sum()
-    equilibre = naive_bayes(priors=[0.5, 0.5]).fit(X, y).predict(X).sum()
-    assert equilibre >= standard
-
-
-def test_knn_un_voisin_memorise_le_train(data):
-    """Avec k = 1, chaque point du train est son propre voisin : score parfait sur le train."""
-    X, y = data
-    pipe = knn().set_params(model__n_neighbors=1).fit(X, y)
-    assert (pipe.predict(X) == y).all()
-
-
-def test_grille_knn_valeurs_de_k_impaires():
-    """k impair pour éviter les égalités de vote entre deux classes."""
-    assert all(k % 2 == 1 for k in KNN_GRID["model__n_neighbors"])
-
-
-def test_espace_svm_gamma_seulement_pour_rbf():
-    """gamma n'a pas de sens pour le noyau linéaire."""
-    for espace in SVM_DISTRIBUTIONS:
-        if espace["model__kernel"] == ["linear"]:
-            assert "model__gamma" not in espace
-
-
-# --- Recherches d'hyperparamètres ---
-
-def test_grid_search_knn(data):
-    X, y = data
-    grid = {"model__n_neighbors": [3, 5], "model__weights": ["uniform"], "model__p": [2]}
-    search = run_grid_search(knn(), grid, X, y, cv=CV3)
-    assert search.best_params_["model__n_neighbors"] in [3, 5]
-    assert len(search.cv_results_["params"]) == 2
-    assert 0 <= search.best_score_ <= 1
-
-
-def test_random_search_svm_respecte_le_budget(data):
-    X, y = data
-    search = run_random_search(svm(), SVM_DISTRIBUTIONS, X, y, n_iter=4, cv=CV3)
-    assert len(search.cv_results_["params"]) == 4
-    assert search.best_params_["model__kernel"] in ["rbf", "linear"]
-
-
-def test_random_search_reproductible(data):
-    """Le random_state commun rend les tirages identiques d'une exécution à l'autre."""
-    X, y = data
-    a = run_random_search(svm(), SVM_DISTRIBUTIONS, X, y, n_iter=3, cv=CV3)
-    b = run_random_search(svm(), SVM_DISTRIBUTIONS, X, y, n_iter=3, cv=CV3)
-    assert a.cv_results_["params"] == b.cv_results_["params"]
+    standard = evaluate(naive_bayes().fit(X, y), X, y)
+    equilibre = evaluate(naive_bayes(priors=[0.5, 0.5]).fit(X, y), X, y)
+    assert equilibre["recall"] >= standard["recall"]
